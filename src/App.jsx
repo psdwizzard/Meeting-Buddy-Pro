@@ -114,6 +114,7 @@ export default function App() {
   const [reprocessingMeetingId, setReprocessingMeetingId] = useState(null);
   const [syncingSpeakerCountMeetingId, setSyncingSpeakerCountMeetingId] = useState(null);
   const [draggingUploadMeetingId, setDraggingUploadMeetingId] = useState(null);
+  const [transcriptCache, setTranscriptCache] = useState({});
 
   const fileInputsRef = useRef({});
   const mediaRecorderRef = useRef(null);
@@ -132,11 +133,16 @@ export default function App() {
   const filteredMeetings = useMemo(() => {
     if (!searchQuery.trim()) return sortedMeetings;
     const query = searchQuery.toLowerCase();
-    return sortedMeetings.filter(m =>
-      m.name?.toLowerCase().includes(query) ||
-      m.speakers?.some(s => s.displayName?.toLowerCase().includes(query))
-    );
-  }, [sortedMeetings, searchQuery]);
+    return sortedMeetings.filter(m => {
+      // Search in meeting name
+      if (m.name?.toLowerCase().includes(query)) return true;
+      // Search in speaker names
+      if (m.speakers?.some(s => s.displayName?.toLowerCase().includes(query))) return true;
+      // Search in cached transcript content
+      if (transcriptCache[m.id]?.toLowerCase().includes(query)) return true;
+      return false;
+    });
+  }, [sortedMeetings, searchQuery, transcriptCache]);
 
   const isApplyingSpeakerNames = applyingSpeakerNamesMeetingId === selectedMeeting?.id;
   const canApplySpeakerNames = Boolean(
@@ -602,6 +608,8 @@ export default function App() {
       }
       const text = await response.text();
       setTranscriptContent(text);
+      // Cache the transcript for search functionality
+      setTranscriptCache(prev => ({ ...prev, [meetingId]: text }));
       maybeSyncSpeakersFromTranscript(meetingId, text);
     } catch (err) {
       console.error(err);
