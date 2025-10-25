@@ -1,0 +1,16 @@
+node_modules/
+.vscode/
+dist/
+.venv/
+*.log
+npm-debug.log*
+coverage/
+data/*.db
+.env
+
+data/audio/
+data/outputs/
+onelogger.*
+
+.claude/
+
