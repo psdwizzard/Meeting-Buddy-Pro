@@ -14,3 +14,8 @@ onelogger.*
 
 .claude/
 
+whisper-diarization/
+
+__pycache__/
+*.pyc
+

@@ -63,6 +63,36 @@ function pickMimeType() {
   return candidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
 }
 
+function detectSpeakerCountFromTranscript(content) {
+  if (!content) {
+    return 0;
+  }
+  const regex = /Speaker\s+(\d+)\s*:/gi;
+  let max = 0;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    const value = Number(match[1]);
+    if (Number.isFinite(value)) {
+      max = Math.max(max, value);
+    }
+  }
+  return max;
+}
+
+function pickFirstAudioFile(fileList = []) {
+  const candidates = Array.from(fileList);
+  if (!candidates.length) {
+    return null;
+  }
+  return candidates.find((file) => {
+    if (!file) return false;
+    if (file.type && file.type.startsWith('audio/')) {
+      return true;
+    }
+    return /\.(wav|mp3|m4a|aac|ogg|webm)$/i.test(file.name || '');
+  }) ?? null;
+}
+
 export default function App() {
   const [meetings, setMeetings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -82,6 +112,8 @@ export default function App() {
   const [diarizationModel, setDiarizationModel] = useState(null);
   const [availableModels, setAvailableModels] = useState([]);
   const [reprocessingMeetingId, setReprocessingMeetingId] = useState(null);
+  const [syncingSpeakerCountMeetingId, setSyncingSpeakerCountMeetingId] = useState(null);
+  const [draggingUploadMeetingId, setDraggingUploadMeetingId] = useState(null);
 
   const fileInputsRef = useRef({});
   const mediaRecorderRef = useRef(null);
@@ -112,7 +144,9 @@ export default function App() {
     selectedMeeting?.files?.srt ||
     selectedMeeting?.files?.csv
   );
+  const isSyncingSpeakers = syncingSpeakerCountMeetingId === selectedMeeting?.id;
   const isReprocessing = reprocessingMeetingId === selectedMeeting?.id;
+  const isUploadDragTarget = draggingUploadMeetingId === selectedMeeting?.id;
   const activeModelLabel = useMemo(() => {
     if (!diarizationModel) {
       return "Default";
@@ -410,6 +444,55 @@ export default function App() {
     }
   }
 
+  function handleUploadDragOver(event, meetingId) {
+    if (!meetingId) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (uploadingMeetingId === meetingId) {
+      return;
+    }
+    if (draggingUploadMeetingId !== meetingId) {
+      setDraggingUploadMeetingId(meetingId);
+    }
+  }
+
+  function handleUploadDragLeave(event, meetingId) {
+    if (!meetingId) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const related = event.relatedTarget;
+    if (related && event.currentTarget?.contains?.(related)) {
+      return;
+    }
+    if (draggingUploadMeetingId === meetingId) {
+      setDraggingUploadMeetingId(null);
+    }
+  }
+
+  function handleUploadDrop(event, meetingId) {
+    if (!meetingId) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setDraggingUploadMeetingId((current) => (current === meetingId ? null : current));
+
+    if (uploadingMeetingId === meetingId) {
+      return;
+    }
+
+    const droppedFile = pickFirstAudioFile(event.dataTransfer?.files || []);
+    if (!droppedFile) {
+      setError("Please drop an audio file");
+      return;
+    }
+    uploadAudio(meetingId, droppedFile);
+  }
+
   function triggerAudioSelect(meetingId) {
     const input = fileInputsRef.current[meetingId];
     if (input) {
@@ -519,6 +602,7 @@ export default function App() {
       }
       const text = await response.text();
       setTranscriptContent(text);
+      maybeSyncSpeakersFromTranscript(meetingId, text);
     } catch (err) {
       console.error(err);
       setTranscriptContent("Failed to load transcript.");
@@ -573,6 +657,60 @@ export default function App() {
       console.error(err);
       setError(err.message ?? "Unable to add speaker");
     }
+  }
+
+  async function syncSpeakerSlots(meetingId, targetCount) {
+    if (!meetingId || !targetCount || targetCount < 1) {
+      return;
+    }
+    if (syncingSpeakerCountMeetingId === meetingId) {
+      return;
+    }
+
+    try {
+      setError("");
+      setSyncingSpeakerCountMeetingId(meetingId);
+      const response = await fetch(`${API_BASE}/api/meetings/${meetingId}/speakers/sync-count`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ count: targetCount })
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to sync speaker count (${response.status})`);
+      }
+      await fetchMeetings();
+    } catch (err) {
+      console.error(err);
+      setError(err.message ?? "Unable to sync speakers with transcript");
+    } finally {
+      setSyncingSpeakerCountMeetingId((current) => (current === meetingId ? null : current));
+    }
+  }
+
+  function maybeSyncSpeakersFromTranscript(meetingId, transcriptText) {
+    if (!meetingId || !transcriptText?.trim()) {
+      return;
+    }
+    if (syncingSpeakerCountMeetingId && syncingSpeakerCountMeetingId !== meetingId) {
+      return;
+    }
+
+    const detected = detectSpeakerCountFromTranscript(transcriptText);
+    if (!detected) {
+      return;
+    }
+
+    const meeting = meetings.find((item) => item.id === meetingId);
+    if (!meeting) {
+      return;
+    }
+
+    const existing = meeting.speakers?.length ?? 0;
+    if (detected <= existing) {
+      return;
+    }
+
+    syncSpeakerSlots(meetingId, detected);
   }
 
   async function reprocessMeeting(meetingId, modelOverride) {
@@ -665,6 +803,10 @@ export default function App() {
       setTranscriptContent("");
     }
   }, [selectedMeetingId, selectedMeeting?.files?.txt]);
+
+  useEffect(() => {
+    setDraggingUploadMeetingId(null);
+  }, [selectedMeetingId]);
 
   return (
     <div className="flex h-screen">
@@ -768,6 +910,12 @@ export default function App() {
                 </div>
               )}
 
+              {isSyncingSpeakers && (
+                <div className="mb-4 p-4 bg-primary/20 border border-primary/40 rounded-lg text-white/80">
+                  Syncing speakers with transcript...
+                </div>
+              )}
+
               {isReprocessing && (
                 <div className="mb-4 p-4 bg-primary/20 border border-primary/40 rounded-lg text-white/80">
                   Reprocessing transcript with {activeModelLabel}.
@@ -782,21 +930,22 @@ export default function App() {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => addSpeaker(selectedMeeting.id)}
-                        className="flex items-center gap-2 text-primary hover:text-primary/80 text-sm"
+                        disabled={isSyncingSpeakers}
+                        className="flex items-center gap-2 text-primary hover:text-primary/80 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <span className="material-symbols-outlined text-base">add</span>
                         Add Speaker
                       </button>
                       <button
                         onClick={() => applySpeakerNames(selectedMeeting.id)}
-                        disabled={!canApplySpeakerNames || isApplyingSpeakerNames || isReprocessing}
+                        disabled={!canApplySpeakerNames || isApplyingSpeakerNames || isReprocessing || isSyncingSpeakers}
                         className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                          isApplyingSpeakerNames || isReprocessing
+                          isApplyingSpeakerNames || isReprocessing || isSyncingSpeakers
                             ? "bg-primary text-white"
                             : "bg-primary/20 text-white hover:bg-primary/30"
                         } disabled:opacity-50 disabled:cursor-not-allowed`}
                       >
-                        {isApplyingSpeakerNames || isReprocessing ? (
+                        {isApplyingSpeakerNames || isReprocessing || isSyncingSpeakers ? (
                           <>
                             <span className="material-symbols-outlined text-base animate-spin">progress_activity</span>
                             {isReprocessing ? "Reprocessing..." : "Processing..."}
@@ -927,7 +1076,15 @@ export default function App() {
               {!selectedMeeting.endedAt && (
                 <div className="mt-8">
                   <h3 className="text-[22px] font-bold leading-tight tracking-[-0.015em] mb-4">Upload Audio</h3>
-                  <div className="bg-[#121212] p-6 rounded-lg">
+                  <div
+                    className={`bg-[#121212] p-6 rounded-lg border transition-colors ${
+                      isUploadDragTarget ? "border-primary/60 bg-primary/10" : "border-transparent"
+                    }`}
+                    onDragOver={(event) => handleUploadDragOver(event, selectedMeeting.id)}
+                    onDragEnter={(event) => handleUploadDragOver(event, selectedMeeting.id)}
+                    onDragLeave={(event) => handleUploadDragLeave(event, selectedMeeting.id)}
+                    onDrop={(event) => handleUploadDrop(event, selectedMeeting.id)}
+                  >
                     <button
                       onClick={() => triggerAudioSelect(selectedMeeting.id)}
                       disabled={uploadingMeetingId === selectedMeeting.id}
@@ -947,6 +1104,9 @@ export default function App() {
                         event.target.value = "";
                       }}
                     />
+                    <p className="text-gray-400 text-sm mt-4">
+                      Drag & drop audio files here or click the button above. Supports WAV, MP3, M4A, OGG, and WEBM.
+                    </p>
                   </div>
                 </div>
               )}
@@ -1009,6 +1169,7 @@ export default function App() {
     </div>
   );
 }
+
 
 
 

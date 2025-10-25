@@ -180,6 +180,34 @@ function addSpeaker(meetingId, displayName) {
   return getMeeting(meetingId);
 }
 
+function ensureSpeakerCount(meetingId, desiredCount) {
+  const meeting = getMeeting(meetingId);
+  if (!meeting) {
+    throw new Error("Meeting not found");
+  }
+
+  const numericTarget = Number(desiredCount);
+  if (!Number.isFinite(numericTarget)) {
+    return meeting;
+  }
+
+  const target = Math.max(1, Math.min(50, Math.floor(numericTarget)));
+  const currentCount = meeting.speakers?.length ?? 0;
+  if (target <= currentCount) {
+    return meeting;
+  }
+
+  const now = new Date().toISOString();
+  const transaction = db.transaction(() => {
+    for (let index = currentCount + 1; index <= target; index += 1) {
+      const label = `Speaker ${index}`;
+      insertSpeakerStmt.run(randomUUID(), meetingId, label, label, now);
+    }
+  });
+  transaction();
+  return getMeeting(meetingId);
+}
+
 function storeSegments(meetingId, segments) {
   const insertSegment = db.prepare(
     "INSERT INTO segments (id, meeting_id, speaker_id, start_ms, end_ms, transcript, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
@@ -214,6 +242,7 @@ module.exports = {
   renameSpeaker,
   addSpeaker,
   resetSpeakers,
+  ensureSpeakerCount,
   storeSegments,
   updateMeetingStatus
 };

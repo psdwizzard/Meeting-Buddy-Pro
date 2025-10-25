@@ -514,6 +514,25 @@ app.post("/api/meetings/:meetingId/reprocess", (request, response) => {
   });
 });
 
+app.post("/api/meetings/:meetingId/speakers/sync-count", (request, response) => {
+  const { meetingId } = request.params;
+  const { count } = request.body ?? {};
+
+  const meeting = storage.getMeeting(meetingId);
+  if (!meeting) {
+    return response.status(404).json({ error: "Meeting not found" });
+  }
+
+  const numericCount = Number(count);
+  if (!Number.isFinite(numericCount) || numericCount < 1) {
+    return response.status(400).json({ error: "count must be at least 1" });
+  }
+
+  const safeCount = Math.min(50, Math.floor(numericCount));
+  const updated = storage.ensureSpeakerCount(meetingId, safeCount);
+  response.json({ meeting: buildMeetingPayload(updated) });
+});
+
 app.post("/api/meetings/:meetingId/speakers/reset", (request, response) => {
   const { meetingId } = request.params;
   const { count, speakers } = request.body ?? {};
