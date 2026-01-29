@@ -6,6 +6,7 @@ const path = require("path");
 const isDev = process.env.NODE_ENV === "development";
 const recordingsRoot = path.join(process.cwd(), "data", "audio");
 fs.mkdirSync(recordingsRoot, { recursive: true });
+const QUICK_RECORD_ENV = "MEETING_BUDDY_QUICK_RECORD";
 
 const DEFAULT_WHISPER_MODEL = process.env.DIARIZATION_WHISPER_MODEL || "medium.en";
 const DIARIZATION_MODELS = [
@@ -116,6 +117,17 @@ function broadcastReprocessRequest() {
   broadcast("meetingBuddy:reprocess-active", {
     model: activeWhisperModel
   });
+}
+
+function wantsQuickRecord() {
+  if (process.argv.includes("--quick-record")) {
+    return true;
+  }
+  const envValue = process.env[QUICK_RECORD_ENV];
+  if (!envValue) {
+    return false;
+  }
+  return envValue === "1" || envValue.toLowerCase() === "true";
 }
 
 function buildModelMenu() {
@@ -284,11 +296,20 @@ function createMainWindow() {
     }
   });
 
+  const shouldQuickRecord = wantsQuickRecord();
   if (isDev) {
-    mainWindow.loadURL("http://127.0.0.1:5173");
+    const url = new URL("http://127.0.0.1:5173");
+    if (shouldQuickRecord) {
+      url.searchParams.set("quickRecord", "1");
+    }
+    mainWindow.loadURL(url.toString());
   } else {
     const indexPath = path.join(__dirname, "..", "dist", "index.html");
-    mainWindow.loadFile(indexPath);
+    if (shouldQuickRecord) {
+      mainWindow.loadFile(indexPath, { query: { quickRecord: "1" } });
+    } else {
+      mainWindow.loadFile(indexPath);
+    }
   }
 
   return mainWindow;

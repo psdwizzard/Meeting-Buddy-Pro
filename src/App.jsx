@@ -32,6 +32,17 @@ function formatDuration(seconds) {
   return `${minutes}:${remainingSeconds}`;
 }
 
+function buildQuickMeetingName() {
+  const timestamp = new Date().toLocaleString("en-US", {
+    month: "numeric",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+  return `Quick Meeting - ${timestamp}`;
+}
+
 function mimeTypeToExtension(mimeType) {
   if (!mimeType) return "webm";
   if (mimeType.includes("ogg")) return "ogg";
@@ -121,6 +132,7 @@ export default function App() {
   const mediaStreamRef = useRef(null);
   const recordingChunksRef = useRef([]);
   const recordingTimerRef = useRef(null);
+  const quickRecordRequestedRef = useRef(false);
 
   const sortedMeetings = useMemo(() => {
     return [...meetings].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -167,6 +179,19 @@ export default function App() {
     return () => {
       cleanupRecording();
     };
+  }, []);
+
+  useEffect(() => {
+    if (quickRecordRequestedRef.current) {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("quickRecord") !== "1") {
+      return;
+    }
+    quickRecordRequestedRef.current = true;
+    window.history.replaceState({}, "", window.location.pathname);
+    createQuickMeetingAndRecord();
   }, []);
 
   // Auto-select first meeting when meetings load
@@ -566,6 +591,31 @@ export default function App() {
     } catch (err) {
       console.error(err);
       setError(err.message ?? "Unable to create meeting");
+    }
+  }
+
+  async function createQuickMeetingAndRecord() {
+    try {
+      setError("");
+      const response = await fetch(`${API_BASE}/api/meetings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: buildQuickMeetingName() })
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to create meeting (${response.status})`);
+      }
+      const data = await response.json();
+      const meetingId = data.meeting?.id;
+      if (!meetingId) {
+        throw new Error("Meeting creation failed");
+      }
+      setSelectedMeetingId(meetingId);
+      await fetchMeetings();
+      await beginRecording(meetingId);
+    } catch (err) {
+      console.error(err);
+      setError(err.message ?? "Unable to start quick meeting");
     }
   }
 
